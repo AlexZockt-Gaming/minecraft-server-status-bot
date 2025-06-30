@@ -110,7 +110,7 @@ client.once("ready", async () => {
   };
 
   checkServer();
-  setInterval(checkServer, 1 * 1000);
+  setInterval(checkServer, 30 * 1000);
 });
 
 client.login(process.env.TOKEN);
