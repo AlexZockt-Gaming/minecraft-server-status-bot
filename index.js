@@ -38,7 +38,7 @@ function createOnlineEmbed(playerCount) {
 function createOfflineEmbed() {
   return new EmbedBuilder()
     .setTitle("🔴 Server Offline")
-    .setDescription(`Hey <@&${ROLE_ID}>, the Minecraft server is **offline**.`)
+    .setDescription(`Hey <@&${ROLE_ID}>, the Minecraft server ist **offline**.`)
     .setColor("Red")
     .setTimestamp()
     .setFooter({ text: "Minecraft Status Bot" });
@@ -83,16 +83,19 @@ async function checkServer(channel) {
     const playerCount = result.players.online;
 
     if (lastStatus !== isOnline) {
+      console.log(`Status changed: ${lastStatus} -> ${isOnline}. Sending new message.`);
       await replaceMessage(channel, createOnlineEmbed(playerCount));
       lastStatus = isOnline;
       lastPlayerCount = playerCount;
     } else if (isOnline && playerCount !== lastPlayerCount) {
+      console.log(`Player count changed: ${lastPlayerCount} -> ${playerCount}. Updating message.`);
       await updateMessage(channel, createOnlineEmbed(playerCount));
       lastPlayerCount = playerCount;
     }
   } catch (err) {
     const isOnline = false;
     if (lastStatus !== isOnline) {
+      console.log(`Status changed: ${lastStatus} -> offline. Sending offline message.`);
       await replaceMessage(channel, createOfflineEmbed());
       lastStatus = isOnline;
       lastPlayerCount = null;
@@ -121,15 +124,16 @@ client.once("ready", async () => {
             botMessage.embeds[0].fields.find((f) => f.name === "Players Online")?.value
           ) || null
         : null;
+      console.log("Recovered last message status:", lastStatus, "playerCount:", lastPlayerCount);
     }
   } catch (err) {
     console.warn("Could not restore last message:", err.message);
   }
 
-  // Start checking
+  // Start monitoring loop
   await checkServer(channel);
   setInterval(() => checkServer(channel), CHECK_INTERVAL);
 });
 
-// === Login ===
+// === Start Bot ===
 client.login(process.env.TOKEN);
