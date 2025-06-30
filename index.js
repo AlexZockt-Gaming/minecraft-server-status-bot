@@ -12,7 +12,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
-let lastStatus = null;
+let lastStatus = null;       // true = online, false = offline
 let lastPlayerCount = null;
 let lastMessageId = null;
 let isChecking = false;
@@ -22,7 +22,7 @@ function createOnlineEmbed(playerCount) {
     .setTitle("🟢 Server Online")
     .setDescription(`Hey <@&${ROLE_ID}>, der Minecraft Server ist **online**!`)
     .addFields(
-      { name: "Players Online", value: `${playerCount}`, inline: true },
+      { name: "Spieler Online", value: `${playerCount}`, inline: true },
       { name: "Server IP", value: SERVER_IP, inline: true }
     )
     .setColor("Green")
@@ -40,27 +40,37 @@ function createOfflineEmbed() {
     .setFooter({ text: "Minecraft Status Bot" });
 }
 
-async function replaceMessage(channel, embed) {
-  if (lastMessageId) {
-    try {
-      const oldMessage = await channel.messages.fetch(lastMessageId);
-      await oldMessage.delete();
-    } catch {}
-    lastMessageId = null;
+async function deleteOldMessage(channel) {
+  if (!lastMessageId) return;
+  try {
+    const oldMessage = await channel.messages.fetch(lastMessageId);
+    await oldMessage.delete();
+    console.log("Alte Nachricht gelöscht.");
+  } catch (err) {
+    console.warn("Alte Nachricht konnte nicht gelöscht werden:", err.message);
   }
-  const msg = await channel.send({ content: `<@&${ROLE_ID}>`, embeds: [embed] });
+  lastMessageId = null;
+}
+
+async function sendNewMessage(channel, embed, mentionRole = false) {
+  const content = mentionRole ? `<@&${ROLE_ID}>` : null;
+  const msg = await channel.send({ content, embeds: [embed] });
   lastMessageId = msg.id;
+  console.log("Neue Nachricht gesendet mit ID:", lastMessageId);
 }
 
 async function updateMessage(channel, embed) {
-  if (!lastMessageId) return;
+  if (!lastMessageId) {
+    await sendNewMessage(channel, embed, false);
+    return;
+  }
   try {
-    const msg = await channel.messages.fetch(lastMessageId);
-    // Inhalt wird aktualisiert, aber ohne Rolle zu pingen (content=null)
-    await msg.edit({ content: null, embeds: [embed] });
-  } catch (e) {
-    // Falls edit fehlschlägt, ersetzen wir die Nachricht komplett
-    await replaceMessage(channel, embed);
+    const message = await channel.messages.fetch(lastMessageId);
+    await message.edit({ content: null, embeds: [embed] });
+    console.log("Nachricht aktualisiert.");
+  } catch (err) {
+    console.warn("Nachricht konnte nicht editiert werden, sende neue Nachricht:", err.message);
+    await sendNewMessage(channel, embed, false);
   }
 }
 
@@ -74,19 +84,22 @@ async function checkServer(channel) {
     const playerCount = result.players.online;
 
     if (lastStatus !== isOnline) {
-      // Status hat sich geändert (offline → online oder umgekehrt)
-      await replaceMessage(channel, createOnlineEmbed(playerCount));
+      // Status hat sich geändert → Nachricht löschen und neue mit Ping senden
+      await deleteOldMessage(channel);
+      await sendNewMessage(channel, createOnlineEmbed(playerCount), true);
       lastStatus = isOnline;
       lastPlayerCount = playerCount;
     } else if (isOnline && playerCount !== lastPlayerCount) {
-      // Nur Spielerzahl hat sich geändert → Nachricht updaten (ohne ping)
+      // Spielerzahl hat sich geändert → Nachricht nur editieren, kein Ping
       await updateMessage(channel, createOnlineEmbed(playerCount));
       lastPlayerCount = playerCount;
     }
-  } catch {
+  } catch (err) {
     const isOnline = false;
     if (lastStatus !== isOnline) {
-      await replaceMessage(channel, createOfflineEmbed());
+      // Server offline → alte Nachricht löschen, neue mit Ping senden
+      await deleteOldMessage(channel);
+      await sendNewMessage(channel, createOfflineEmbed(), true);
       lastStatus = isOnline;
       lastPlayerCount = null;
     }
@@ -99,22 +112,24 @@ client.once("ready", async () => {
   console.log(`Bot läuft als ${client.user.tag}`);
   const channel = await client.channels.fetch(CHANNEL_ID);
 
+  // Versuche alte Nachricht zu laden und Status wiederherzustellen
   try {
     const messages = await channel.messages.fetch({ limit: 50 });
     const botMessage = messages.find(
       (msg) => msg.author.id === client.user.id && msg.embeds.length > 0
     );
-
     if (botMessage) {
       lastMessageId = botMessage.id;
       const embedTitle = botMessage.embeds[0].title || "";
       lastStatus = embedTitle.startsWith("🟢");
       lastPlayerCount = lastStatus
-        ? parseInt(botMessage.embeds[0].fields.find((f) => f.name === "Players Online")?.value) || 0
+        ? parseInt(botMessage.embeds[0].fields.find(f => f.name === "Spieler Online")?.value) || 0
         : null;
-      console.log("Letzten Status wiederhergestellt:", lastStatus, lastPlayerCount);
+      console.log("Status wiederhergestellt:", lastStatus, lastPlayerCount);
     }
-  } catch {}
+  } catch (err) {
+    console.warn("Konnte alte Nachricht nicht wiederherstellen:", err.message);
+  }
 
   setInterval(() => checkServer(channel), CHECK_INTERVAL);
 });
