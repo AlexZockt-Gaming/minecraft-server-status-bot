@@ -7,7 +7,7 @@ const SERVER_IP = "funklore-smp.aternos.me";
 const SERVER_PORT = 25565;
 const CHANNEL_ID = "1389111236074930318";
 const ROLE_ID = process.env.ROLE_ID;
-const CHECK_INTERVAL = 1000; // 1 second
+const CHECK_INTERVAL = 1000;
 
 // === Client Setup ===
 const client = new Client({
@@ -18,7 +18,7 @@ const client = new Client({
 let lastStatus = null;
 let lastPlayerCount = null;
 let lastMessageId = null;
-let isChecking = false; // Prevent overlapping executions
+let isChecking = false; // Verhindert parallele Checks
 
 // === Embed Templates ===
 function createOnlineEmbed(playerCount) {
@@ -38,10 +38,15 @@ function createOnlineEmbed(playerCount) {
 function createOfflineEmbed() {
   return new EmbedBuilder()
     .setTitle("🔴 Server Offline")
-    .setDescription(`Hey <@&${ROLE_ID}>, the Minecraft server ist **offline**.`)
+    .setDescription(`Hey <@&${ROLE_ID}>, the Minecraft server is **offline**.`)
     .setColor("Red")
     .setTimestamp()
     .setFooter({ text: "Minecraft Status Bot" });
+}
+
+// === Hilfsfunktion zum Vergleich ===
+function statusesEqual(oldStatus, newStatus, oldCount, newCount) {
+  return oldStatus === newStatus && (oldCount === newCount || (oldCount === null && newCount === 0));
 }
 
 // === Message Management ===
@@ -82,29 +87,22 @@ async function checkServer(channel) {
     const isOnline = true;
     const playerCount = result.players.online;
 
-    console.log("checkServer:", {
-      lastStatus,
-      isOnline,
-      lastPlayerCount,
-      playerCount,
-    });
+    console.log(`Checking server:
+      lastStatus=${lastStatus}, lastPlayerCount=${lastPlayerCount}
+      currentStatus=${isOnline}, currentPlayerCount=${playerCount}`);
 
-    if (lastStatus !== isOnline) {
-      console.log(`Status changed: ${lastStatus} -> ${isOnline}. Sending new message.`);
+    if (!statusesEqual(lastStatus, isOnline, lastPlayerCount, playerCount)) {
+      console.log(`Status or player count changed, updating message.`);
       await replaceMessage(channel, createOnlineEmbed(playerCount));
       lastStatus = isOnline;
-      lastPlayerCount = playerCount;
-    } else if (isOnline && playerCount !== lastPlayerCount) {
-      console.log(`Player count changed: ${lastPlayerCount} -> ${playerCount}. Updating message.`);
-      await updateMessage(channel, createOnlineEmbed(playerCount));
       lastPlayerCount = playerCount;
     }
   } catch (err) {
     const isOnline = false;
-    console.log("checkServer: Caught error, setting offline.");
+    console.log("Server offline or error caught.");
 
     if (lastStatus !== isOnline) {
-      console.log(`Status changed: ${lastStatus} -> offline. Sending offline message.`);
+      console.log(`Status changed to offline, updating message.`);
       await replaceMessage(channel, createOfflineEmbed());
       lastStatus = isOnline;
       lastPlayerCount = null;
@@ -114,12 +112,12 @@ async function checkServer(channel) {
   }
 }
 
-// === Bot Ready ===
+// === Bot Ready Event ===
 client.once("ready", async () => {
   console.log(`✅ Bot is running as ${client.user.tag}`);
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  // Try to recover last message after restart
+  // Versuche letzte Nachricht zu laden und Status wiederherzustellen
   try {
     const messages = await channel.messages.fetch({ limit: 50 });
     const botMessage = messages.find(
@@ -128,11 +126,10 @@ client.once("ready", async () => {
 
     if (botMessage) {
       lastMessageId = botMessage.id;
-      lastStatus = botMessage.embeds[0].title.includes("Online");
+      const embedTitle = botMessage.embeds[0].title || "";
+      lastStatus = embedTitle.startsWith("🟢");
       lastPlayerCount = lastStatus
-        ? parseInt(
-            botMessage.embeds[0].fields.find((f) => f.name === "Players Online")?.value
-          ) || null
+        ? parseInt(botMessage.embeds[0].fields.find((f) => f.name === "Players Online")?.value) || 0
         : null;
 
       console.log("Recovered last message status:", lastStatus, "playerCount:", lastPlayerCount);
@@ -141,16 +138,9 @@ client.once("ready", async () => {
     console.warn("Could not restore last message:", err.message);
   }
 
-  // Wenn lastStatus bereits bekannt, dann erst INTERVALL starten
-  if (lastStatus !== null) {
-    setInterval(() => checkServer(channel), CHECK_INTERVAL);
-    // Optional: nicht direkt nochmal prüfen, da wir Status aus embed kennen
-  } else {
-    // Falls keine Nachricht gefunden, direkt prüfen und dann INTERVALL starten
-    await checkServer(channel);
-    setInterval(() => checkServer(channel), CHECK_INTERVAL);
-  }
+  // Starte den Intervall, der regelmäßig den Serverstatus prüft
+  setInterval(() => checkServer(channel), CHECK_INTERVAL);
 });
 
-// === Login ===
+// === Bot Login ===
 client.login(process.env.TOKEN);
