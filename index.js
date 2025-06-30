@@ -82,6 +82,13 @@ async function checkServer(channel) {
     const isOnline = true;
     const playerCount = result.players.online;
 
+    console.log("checkServer:", {
+      lastStatus,
+      isOnline,
+      lastPlayerCount,
+      playerCount,
+    });
+
     if (lastStatus !== isOnline) {
       console.log(`Status changed: ${lastStatus} -> ${isOnline}. Sending new message.`);
       await replaceMessage(channel, createOnlineEmbed(playerCount));
@@ -94,6 +101,8 @@ async function checkServer(channel) {
     }
   } catch (err) {
     const isOnline = false;
+    console.log("checkServer: Caught error, setting offline.");
+
     if (lastStatus !== isOnline) {
       console.log(`Status changed: ${lastStatus} -> offline. Sending offline message.`);
       await replaceMessage(channel, createOfflineEmbed());
@@ -110,12 +119,13 @@ client.once("ready", async () => {
   console.log(`✅ Bot is running as ${client.user.tag}`);
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  // Recover previous bot message if available
+  // Try to recover last message after restart
   try {
     const messages = await channel.messages.fetch({ limit: 50 });
     const botMessage = messages.find(
       (msg) => msg.author.id === client.user.id && msg.embeds.length > 0
     );
+
     if (botMessage) {
       lastMessageId = botMessage.id;
       lastStatus = botMessage.embeds[0].title.includes("Online");
@@ -124,16 +134,23 @@ client.once("ready", async () => {
             botMessage.embeds[0].fields.find((f) => f.name === "Players Online")?.value
           ) || null
         : null;
+
       console.log("Recovered last message status:", lastStatus, "playerCount:", lastPlayerCount);
     }
   } catch (err) {
     console.warn("Could not restore last message:", err.message);
   }
 
-  // Start monitoring loop
-  await checkServer(channel);
-  setInterval(() => checkServer(channel), CHECK_INTERVAL);
+  // Wenn lastStatus bereits bekannt, dann erst INTERVALL starten
+  if (lastStatus !== null) {
+    setInterval(() => checkServer(channel), CHECK_INTERVAL);
+    // Optional: nicht direkt nochmal prüfen, da wir Status aus embed kennen
+  } else {
+    // Falls keine Nachricht gefunden, direkt prüfen und dann INTERVALL starten
+    await checkServer(channel);
+    setInterval(() => checkServer(channel), CHECK_INTERVAL);
+  }
 });
 
-// === Start Bot ===
+// === Login ===
 client.login(process.env.TOKEN);
