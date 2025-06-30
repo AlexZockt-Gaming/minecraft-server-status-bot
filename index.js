@@ -12,113 +12,108 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
-let lastStatus = null;      // true = online, false = offline
+let lastStatus = null;
 let lastPlayerCount = null;
-let lastMessageId = null;
-let isChecking = false;
+let statusMessageId = null;
 
-function createOnlineEmbed(playerCount) {
-  return new EmbedBuilder()
-    .setTitle("🟢 Server Online")
-    .setDescription(`Hey <@&${ROLE_ID}>, der Minecraft Server ist **online**!`)
-    .addFields(
+function createStatusEmbed(isOnline, playerCount = 0) {
+  const embed = new EmbedBuilder()
+    .setTitle(isOnline ? "🟢 Server Online" : "🔴 Server Offline")
+    .setDescription(
+      isOnline
+        ? `Der Minecraft Server ist **online**.`
+        : `Der Minecraft Server ist **offline**.`
+    )
+    .setColor(isOnline ? "Green" : "Red")
+    .setTimestamp()
+    .setFooter({ text: "Minecraft Status Bot" });
+
+  if (isOnline) {
+    embed.addFields(
       { name: "Players Online", value: `${playerCount}`, inline: true },
       { name: "Server IP", value: SERVER_IP, inline: true }
-    )
-    .setColor("Green")
-    .setTimestamp()
-    .setFooter({ text: "Minecraft Status Bot" });
+    );
+  }
+
+  return embed;
 }
 
-function createOfflineEmbed() {
-  return new EmbedBuilder()
-    .setTitle("🔴 Server Offline")
-    .setDescription(`Hey <@&${ROLE_ID}>, der Minecraft Server ist **offline**.`)
-    .setColor("Red")
-    .setTimestamp()
-    .setFooter({ text: "Minecraft Status Bot" });
+async function sendTemporaryPing(channel, status) {
+  const message = await channel.send({
+    content: `<@&${ROLE_ID}> Der Server ist jetzt **${status}**.`,
+  });
+
+  setTimeout(() => {
+    message.delete().catch(() => {});
+  }, 5000); // Nach 5 Sekunden löschen
 }
 
-async function sendOrUpdateMessage(channel, embed, mentionRole) {
-  if (!lastMessageId) {
-    // Nachricht senden mit Ping (nur einmal)
-    const msg = await channel.send({ content: mentionRole ? `<@&${ROLE_ID}>` : null, embeds: [embed] });
-    lastMessageId = msg.id;
-  } else {
-    // Nachricht updaten ohne Ping
+async function updateStatusMessage(channel, isOnline, playerCount) {
+  const embed = createStatusEmbed(isOnline, playerCount);
+
+  if (statusMessageId) {
     try {
-      const msg = await channel.messages.fetch(lastMessageId);
-      await msg.edit({ content: null, embeds: [embed] });
+      const msg = await channel.messages.fetch(statusMessageId);
+      await msg.edit({ embeds: [embed] });
+      return;
     } catch {
-      // Falls die Nachricht gelöscht wurde, neu senden mit Ping (nur wenn Statuswechsel)
-      const msg = await channel.send({ content: mentionRole ? `<@&${ROLE_ID}>` : null, embeds: [embed] });
-      lastMessageId = msg.id;
+      statusMessageId = null; // Wenn Nachricht nicht existiert
     }
   }
+
+  const msg = await channel.send({ embeds: [embed] });
+  statusMessageId = msg.id;
 }
 
 async function checkServer(channel) {
-  if (isChecking) return;
-  isChecking = true;
-
   try {
     const result = await status(SERVER_IP, SERVER_PORT);
     const isOnline = true;
     const playerCount = result.players.online;
 
-    if (lastStatus === null) {
-      // Erster Lauf: Nachricht mit Ping senden
-      await sendOrUpdateMessage(channel, createOnlineEmbed(playerCount), true);
-      lastStatus = isOnline;
-      lastPlayerCount = playerCount;
-    } else if (lastStatus !== isOnline) {
-      // Status hat sich geändert → Nachricht mit Ping ersetzen
-      await sendOrUpdateMessage(channel, createOnlineEmbed(playerCount), true);
-      lastStatus = isOnline;
-      lastPlayerCount = playerCount;
-    } else if (isOnline && lastPlayerCount !== playerCount) {
-      // Nur Spieleranzahl geändert → Nachricht updaten ohne Ping
-      await sendOrUpdateMessage(channel, createOnlineEmbed(playerCount), false);
-      lastPlayerCount = playerCount;
+    if (lastStatus !== isOnline) {
+      await sendTemporaryPing(channel, "online");
     }
+
+    const statusChanged = lastStatus !== isOnline;
+    const playersChanged = lastPlayerCount !== playerCount;
+
+    if (statusChanged || playersChanged) {
+      await updateStatusMessage(channel, isOnline, playerCount);
+    }
+
+    lastStatus = isOnline;
+    lastPlayerCount = playerCount;
   } catch {
     const isOnline = false;
 
-    if (lastStatus === null || lastStatus !== isOnline) {
-      // Status offline neu setzen mit Ping
-      await sendOrUpdateMessage(channel, createOfflineEmbed(), true);
+    if (lastStatus !== isOnline) {
+      await sendTemporaryPing(channel, "offline");
+      await updateStatusMessage(channel, false);
       lastStatus = isOnline;
       lastPlayerCount = null;
     }
-  } finally {
-    isChecking = false;
   }
 }
 
 client.once("ready", async () => {
-  console.log(`Bot läuft als ${client.user.tag}`);
+  console.log(`✅ Bot läuft als ${client.user.tag}`);
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  // Versuche alte Bot-Nachricht zu finden
+  // Nach Start letzten Status rekonstruieren (optional)
   try {
-    const messages = await channel.messages.fetch({ limit: 50 });
-    const botMessage = messages.find(
+    const messages = await channel.messages.fetch({ limit: 10 });
+    const statusMsg = messages.find(
       (msg) => msg.author.id === client.user.id && msg.embeds.length > 0
     );
-    if (botMessage) {
-      lastMessageId = botMessage.id;
-      const embedTitle = botMessage.embeds[0].title || "";
-      lastStatus = embedTitle.startsWith("🟢");
-      lastPlayerCount = lastStatus
-        ? parseInt(botMessage.embeds[0].fields.find(f => f.name === "Players Online")?.value) || 0
-        : null;
-      console.log("Letzten Status wiederhergestellt:", lastStatus, lastPlayerCount);
-    }
-  } catch (err) {
-    console.warn("Konnte letzte Nachricht nicht wiederherstellen:", err.message);
-  }
 
-  // Starte Status-Check Intervall
+    if (statusMsg) {
+      statusMessageId = statusMsg.id;
+    }
+  } catch {}
+
+  // Sofortiger erster Check
+  await checkServer(channel);
   setInterval(() => checkServer(channel), CHECK_INTERVAL);
 });
 
