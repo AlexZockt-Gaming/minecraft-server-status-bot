@@ -91,8 +91,14 @@ async function updateMessage(channel, embed) {
     const message = await channel.messages.fetch(lastMessageId);
     await message.edit({ content: null, embeds: [embed] });
   } catch (e) {
-    console.warn("Failed to update message, sending new one instead.");
-    await replaceMessage(channel, embed);
+    console.warn("⚠️ Could not edit message:", e.message);
+    // Wenn Nachricht nicht existiert (z. B. manuell gelöscht), dann:
+    try {
+      const msg = await channel.send({ content: `<@&${ROLE_ID}>`, embeds: [embed] });
+      lastMessageId = msg.id;
+    } catch (sendErr) {
+      console.error("❌ Failed to send fallback message:", sendErr.message);
+    }
   }
 }
 
