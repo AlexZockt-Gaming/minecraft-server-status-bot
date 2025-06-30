@@ -1,11 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
 const { status } = require("minecraft-server-util");
-const express = require("express");
 require("dotenv").config();
-
-const app = express();
-app.get("/", (req, res) => res.send("Bot is running!"));
-app.listen(3000, () => console.log("Webserver running on port 3000"));
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -14,39 +9,55 @@ const client = new Client({
 const SERVER_IP = "funklore-smp.aternos.me";
 const CHANNEL_ID = "1389111236074930318";
 const ROLE_ID = process.env.ROLE_ID;
+
 let lastStatus = null;
-let lastMessage = null;
+let lastMessageId = null;
 let lastPlayerCount = null;
 
 client.once("ready", async () => {
   console.log(`Bot is ready as ${client.user.tag}`);
-
   const channel = await client.channels.fetch(CHANNEL_ID);
 
-  const createOnlineEmbed = (playerCount) => {
-    return new EmbedBuilder()
+  // Optional: Versuche letzte Bot-Nachricht zu laden, falls Bot neu startet
+  try {
+    const messages = await channel.messages.fetch({ limit: 50 });
+    const botMessage = messages.find(
+      (m) => m.author.id === client.user.id && (m.embeds.length > 0)
+    );
+    if (botMessage) {
+      lastMessageId = botMessage.id;
+      lastStatus = botMessage.embeds[0].title.includes("🟢 Server Online");
+      lastPlayerCount = lastStatus
+        ? parseInt(
+            botMessage.embeds[0].fields.find((f) => f.name === "Players Online")
+              ?.value
+          ) || null
+        : null;
+    }
+  } catch (e) {
+    console.warn("Konnte letzte Nachricht nicht laden:", e.message);
+  }
+
+  const createOnlineEmbed = (playerCount) =>
+    new EmbedBuilder()
       .setTitle("🟢 Server Online")
-      .setDescription(`Hey <@&${ROLE_ID}>, the Minecraft server is **online**!`)
+      .setDescription(`Hey <@&${ROLE_ID}>, der Minecraft Server ist **online**!`)
       .addFields(
-        { name: "Players Online", value: `${playerCount}`, inline: true },
-        { name: "Server IP", value: SERVER_IP, inline: true },
+        { name: "Spieler online", value: `${playerCount}`, inline: true },
+        { name: "Server IP", value: SERVER_IP, inline: true }
       )
       .setColor("Green")
       .setThumbnail("https://i.imgur.com/CwnAX6J.png")
       .setTimestamp()
       .setFooter({ text: "Minecraft Status Bot" });
-  };
 
-  const createOfflineEmbed = () => {
-    return new EmbedBuilder()
+  const createOfflineEmbed = () =>
+    new EmbedBuilder()
       .setTitle("🔴 Server Offline")
-      .setDescription(
-        `Hey <@&${ROLE_ID}>, the Minecraft server is **offline**.`,
-      )
+      .setDescription(`Hey <@&${ROLE_ID}>, der Minecraft Server ist **offline**.`)
       .setColor("Red")
       .setTimestamp()
       .setFooter({ text: "Minecraft Status Bot" });
-  };
 
   const checkServer = async () => {
     try {
@@ -55,13 +66,15 @@ client.once("ready", async () => {
       const playerCount = result.players.online;
 
       if (lastStatus !== isOnline) {
-        if (lastMessage) {
+        // Status hat sich geändert
+        if (lastMessageId) {
           try {
-            await lastMessage.delete();
-          } catch (e) {
-            console.warn("Could not delete old message:", e.message);
+            const oldMsg = await channel.messages.fetch(lastMessageId);
+            await oldMsg.delete();
+          } catch {
+            // Nachricht schon gelöscht oder nicht gefunden
           }
-          lastMessage = null;
+          lastMessageId = null;
         }
 
         const embed = createOnlineEmbed(playerCount);
@@ -69,47 +82,53 @@ client.once("ready", async () => {
           content: `<@&${ROLE_ID}>`,
           embeds: [embed],
         });
-        lastMessage = msg;
+        lastMessageId = msg.id;
         lastStatus = isOnline;
         lastPlayerCount = playerCount;
       } else if (isOnline && playerCount !== lastPlayerCount) {
-        if (lastMessage) {
+        // Nur Spieleranzahl hat sich geändert
+        if (lastMessageId) {
           try {
+            const oldMsg = await channel.messages.fetch(lastMessageId);
             const embed = createOnlineEmbed(playerCount);
-            await lastMessage.edit({
+            await oldMsg.edit({ content: null, embeds: [embed] }); // Ping nur beim neuen Posten
+            lastPlayerCount = playerCount;
+          } catch {
+            // Falls Nachricht nicht gefunden -> neu senden
+            const embed = createOnlineEmbed(playerCount);
+            const msg = await channel.send({
               content: `<@&${ROLE_ID}>`,
               embeds: [embed],
             });
+            lastMessageId = msg.id;
             lastPlayerCount = playerCount;
-          } catch (e) {
-            console.warn("Could not edit message:", e.message);
           }
         }
       }
     } catch (error) {
       const isOnline = false;
       if (lastStatus !== isOnline) {
-        if (lastMessage) {
+        if (lastMessageId) {
           try {
-            await lastMessage.delete();
-          } catch (e) {
-            console.warn("Could not delete old message:", e.message);
-          }
-          lastMessage = null;
+            const oldMsg = await channel.messages.fetch(lastMessageId);
+            await oldMsg.delete();
+          } catch {}
+          lastMessageId = null;
         }
         const embed = createOfflineEmbed();
         const msg = await channel.send({
           content: `<@&${ROLE_ID}>`,
           embeds: [embed],
         });
-        lastMessage = msg;
+        lastMessageId = msg.id;
         lastStatus = isOnline;
         lastPlayerCount = null;
       }
     }
   };
 
-  checkServer();
+  // Direkt checken und dann alle 30 Sekunden
+  await checkServer();
   setInterval(checkServer, 30 * 1000);
 });
 
