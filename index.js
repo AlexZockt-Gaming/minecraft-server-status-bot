@@ -52,6 +52,18 @@ async function replaceMessage(channel, embed) {
   lastMessageId = msg.id;
 }
 
+async function updateMessage(channel, embed) {
+  if (!lastMessageId) return;
+  try {
+    const msg = await channel.messages.fetch(lastMessageId);
+    // Inhalt wird aktualisiert, aber ohne Rolle zu pingen (content=null)
+    await msg.edit({ content: null, embeds: [embed] });
+  } catch (e) {
+    // Falls edit fehlschlägt, ersetzen wir die Nachricht komplett
+    await replaceMessage(channel, embed);
+  }
+}
+
 async function checkServer(channel) {
   if (isChecking) return;
   isChecking = true;
@@ -61,9 +73,14 @@ async function checkServer(channel) {
     const isOnline = true;
     const playerCount = result.players.online;
 
-    if (lastStatus !== isOnline || lastPlayerCount !== playerCount) {
+    if (lastStatus !== isOnline) {
+      // Status hat sich geändert (offline → online oder umgekehrt)
       await replaceMessage(channel, createOnlineEmbed(playerCount));
       lastStatus = isOnline;
+      lastPlayerCount = playerCount;
+    } else if (isOnline && playerCount !== lastPlayerCount) {
+      // Nur Spielerzahl hat sich geändert → Nachricht updaten (ohne ping)
+      await updateMessage(channel, createOnlineEmbed(playerCount));
       lastPlayerCount = playerCount;
     }
   } catch {
