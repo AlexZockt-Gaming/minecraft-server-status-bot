@@ -6,7 +6,7 @@ const SERVER_IP = "funklore-smp.aternos.me";
 const SERVER_PORT = 25565;
 const CHANNEL_ID = "1389111236074930318";
 const ROLE_ID = process.env.ROLE_ID;
-const CHECK_INTERVAL = 10_000; // Check every 10 seconds
+const CHECK_INTERVAL = 1000;
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
